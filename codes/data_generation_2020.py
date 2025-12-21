@@ -18,9 +18,9 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 file_path = DATA_DIR / "anes_timeseries_2020_csv_20220210.csv"
 
 # Output files
-jsonl_filename = OUTPUT_DIR / "anes_2020_finetune.jsonl"
-json_filename  = OUTPUT_DIR / "anes_2020_chat_finetune.json"
-csv_filename   = OUTPUT_DIR / "anes_2020_chat_finetune.csv"
+jsonl_filename = OUTPUT_DIR / "anes_2020_finetune_sample.jsonl"
+json_filename  = OUTPUT_DIR / "anes_2020_chat_finetune_sample.json"
+csv_filename   = OUTPUT_DIR / "anes_2020_chat_finetune_sample.csv"
 
 # ==========================================
 # 1. Load and Clean Data
@@ -143,7 +143,7 @@ with open(jsonl_filename, "w") as f:
 with open(json_filename, "w") as f:
     json.dump(chat_objects, f, indent=2)
 
-pd.DataFrame(flat_rows).to_csv(csv_filename, index=False)
+pd.DataFrame(flat_rows).sample(frac=0.01).to_csv(csv_filename, index=False)
 
 print("Saved:")
 print(" -", jsonl_filename)
