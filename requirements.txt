@@ -29,3 +29,6 @@ trueskill
 typer[all]
 uvicorn[standard]==0.22.0
 wandb
+transformers
+torch
+accelerate
