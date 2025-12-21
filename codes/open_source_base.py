@@ -34,7 +34,7 @@ with open(args.data_path, "r") as f:
     data = json.load(f)
 
 random.shuffle(data)
-data = data[:3]  # for testing; remove in full run
+# data = data[:3]  # for testing; remove in full run
 
 # -----------------------------
 # Candidates
