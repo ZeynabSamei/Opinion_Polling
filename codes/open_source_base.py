@@ -150,7 +150,7 @@ for idx, entry in tqdm(enumerate(data), total=len(data)):
     mi = mutual_information(probs, gt)
     acc = accuracy_from_probs(probs, gt)
 
-    print(pred, gt, probs)
+    # print(pred, gt, probs)
 
     results.append({
         "idx": idx,
