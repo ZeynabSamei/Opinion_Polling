@@ -124,34 +124,31 @@ def extract_ground_truth(messages):
 
 def get_vote_probs(messages, max_new_tokens=1):
     """
-    Get probabilities for A/B labels using the model.
-    Messages: list of dicts {"role":..., "content":...}
-    Returns: dict {candidate_name: probability}
+    Compute candidate probabilities using the model and label tokens A/B.
+    messages: list of dicts {"role": ..., "content": ...}
+    returns: dict {candidate_name: probability}
     """
-    clean_messages = strip_assistant_messages(messages)
-    prompt = "\n".join(f"{m['role']}: {m['content']}" for m in clean_messages)
-    
-    # Tokenize input
+    clean_msgs = [m for m in messages if m['role'] != 'assistant']
+    prompt = "\n".join(f"{m['role']}: {m['content']}" for m in clean_msgs)
+
+    # Tokenize prompt
     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-    
-    # Generate next token logits
+
+    # Generate one token (A or B)
     with torch.no_grad():
-        outputs = model(**inputs)
-        logits = outputs.logits[0, -1, :]  # last token logits
-        probs_all = torch.softmax(logits, dim=-1)
+        output = model(**inputs)
+        logits = output.logits[0, -1, :]  # last token logits
 
-    # Extract probabilities for A/B labels
-    probs = {}
-    for label, token_id in LABEL_TOKEN_IDS.items():
-        probs[label] = probs_all[token_id].item()
-
-    # Normalize
-    Z = sum(probs.values())
-    probs = {k: v / Z for k, v in probs.items()}
-
+    # Grab logits for A/B labels only
+    label_logits = torch.tensor([logits[LABEL_TOKEN_IDS[k]] for k in LABEL_TOKEN_IDS])
+    
+    # Softmax to get probabilities
+    probs_array = torch.softmax(label_logits, dim=0).cpu().numpy()
+    
     # Map back to candidate names
-    probs_named = {LABELS[k]: v for k, v in probs.items()}
-    return probs_named
+    probs = {LABELS[k]: float(probs_array[i]) for i, k in enumerate(LABEL_TOKEN_IDS)}
+    return probs
+
 
 
 def accuracy_from_probs(probs, ground_truth):
@@ -179,9 +176,10 @@ for idx, entry in tqdm(enumerate(data), total=len(data)):
         continue
 
 
+
     probs = get_vote_probs(messages)
     pred = max(probs, key=probs.get)  # predicted candidate
-    mi = -np.log2(probs[normalize_vote(pred)])  # mutual information
+    mi = -np.log2(probs[ground_truth])  # mutual information
     acc = accuracy_from_probs(probs, gt)
 
     print(pred)
