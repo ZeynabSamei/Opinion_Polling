@@ -306,6 +306,7 @@ model = AutoModelForCausalLM.from_pretrained(
     torch_dtype=torch.float16
 )
 model.eval()
+device = model.device if hasattr(model, "device") else next(model.parameters()).device
 
 # -----------------------------
 # Election year → candidates
@@ -322,12 +323,11 @@ CANDIDATES_NORM = [c.lower() for c in CANDIDATES]
 # -----------------------------
 # Candidate token IDs (for real probabilities)
 # -----------------------------
-CAND_TOKEN_IDS = {}
-for cand in CANDIDATES:
-    token_ids = tokenizer.encode(cand, add_special_tokens=False)
-    if len(token_ids) == 0:
-        raise ValueError(f"Candidate '{cand}' has no tokens")
-    CAND_TOKEN_IDS[cand] = token_ids
+
+CAND_TOKEN_IDS = {
+    cand: tokenizer.encode(cand, add_special_tokens=False)
+    for cand in CANDIDATES
+}
 
 print("\nCandidate tokenization:")
 for c, ids in CAND_TOKEN_IDS.items():
@@ -358,7 +358,7 @@ def extract_ground_truth(messages):
             return normalize_vote(m["content"])
     return None
 
-def get_vote_probs(messages):
+def get_vote_probs(messages, eps=1e-12):
     clean_msgs = strip_assistant_messages(messages)
     prompt = "\n".join(f"{m['role']}: {m['content']}" for m in clean_msgs)
 
@@ -368,27 +368,39 @@ def get_vote_probs(messages):
     logps = {}
 
     with torch.no_grad():
-        for cand, cand_ids in CAND_TOKEN_IDS.items():
-            cand_ids = torch.tensor(cand_ids, device=device).unsqueeze(0)
+        outputs = model(input_ids=input_ids)
+        logits = outputs.logits
 
-            full_input = torch.cat([input_ids, cand_ids], dim=1)
-            outputs = model(full_input)
-            logits = outputs.logits
+    for cand, cand_ids in CAND_TOKEN_IDS.items():
+        cand_ids = torch.tensor(cand_ids, device=device)
 
-            # compute conditional log-prob
-            log_prob = 0.0
-            for i, token_id in enumerate(cand_ids[0]):
-                pos = input_ids.shape[1] + i - 1
-                log_prob += torch.log_softmax(logits[0, pos], dim=-1)[token_id]
+        total_logp = 0.0
+        context_ids = input_ids.clone()
 
-            logps[cand] = log_prob.item()
+        for tok in cand_ids:
+            outputs = model(input_ids=context_ids)
+            next_logits = outputs.logits[0, -1]
+            log_probs = torch.log_softmax(next_logits, dim=-1)
 
-    # normalize
+            total_logp += log_probs[tok].item()
+
+            context_ids = torch.cat(
+                [context_ids, tok.view(1, 1)], dim=1
+            )
+
+        logps[cand] = total_logp
+
+    # log-softmax over candidates
     max_logp = max(logps.values())
-    exp_probs = {k: np.exp(v - max_logp) for k, v in logps.items()}
-    Z = sum(exp_probs.values())
+    exp_probs = {
+        c: np.exp(lp - max_logp)
+        for c, lp in logps.items()
+    }
 
-    return {k: v / Z for k, v in exp_probs.items()}
+    Z = sum(exp_probs.values()) + eps
+    probs = {c: v / Z for c, v in exp_probs.items()}
+
+    return probs
 
 
 def accuracy_from_probs(probs, ground_truth):
