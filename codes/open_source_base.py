@@ -161,6 +161,7 @@ for idx, entry in tqdm(enumerate(data), total=len(data)):
         "mutual_inf": mi
     })
 
+
     if (idx+1) % args.save_every == 0:
         df_tmp = pd.DataFrame(results)
         save_path = os.path.join(args.out_dir, f"{args.model_name.replace('/', '_')}_{args.election_year}_partial.pkl")
@@ -170,7 +171,8 @@ for idx, entry in tqdm(enumerate(data), total=len(data)):
     time.sleep(args.sleep)
 
 df_final = pd.DataFrame(results)
-
+for r in results:
+    print(r["ground_truth"], r["predicted_vote"], r["probs"])
 # -----------------------------
 # Compute vote metrics
 # -----------------------------
