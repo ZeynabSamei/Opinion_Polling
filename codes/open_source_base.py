@@ -48,6 +48,7 @@ with open(args.data_path, "r") as f:
     data = json.load(f)
 data=data[:3]
 df_primary=pd.DataFrame(data)
+df_primary['raw_idx']= list(range(len(data)))
 # Build input dataframe (preserve order)
 df_input = pd.DataFrame({
     "raw_idx": list(range(len(data))),
