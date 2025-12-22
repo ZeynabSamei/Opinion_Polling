@@ -359,37 +359,36 @@ def extract_ground_truth(messages):
     return None
 
 def get_vote_probs(messages):
-    """
-    Returns P(candidate | context) using next-token logits.
-    """
     clean_msgs = strip_assistant_messages(messages)
     prompt = "\n".join(f"{m['role']}: {m['content']}" for m in clean_msgs)
 
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+    inputs = tokenizer(prompt, return_tensors="pt").to(device)
+    input_ids = inputs["input_ids"]
+
+    logps = {}
 
     with torch.no_grad():
-        outputs = model(**inputs)
+        for cand, cand_ids in CAND_TOKEN_IDS.items():
+            cand_ids = torch.tensor(cand_ids, device=device).unsqueeze(0)
 
-    # next-token logits
-    logits = outputs.logits[0, -1, :]
-    probs = torch.softmax(logits, dim=-1)
+            full_input = torch.cat([input_ids, cand_ids], dim=1)
+            outputs = model(full_input)
+            logits = outputs.logits
 
-    cand_probs = {}
+            # compute conditional log-prob
+            log_prob = 0.0
+            for i, token_id in enumerate(cand_ids[0]):
+                pos = input_ids.shape[1] + i - 1
+                log_prob += torch.log_softmax(logits[0, pos], dim=-1)[token_id]
 
-    for cand, token_ids in CAND_TOKEN_IDS.items():
-        if not token_ids:
-            cand_probs[cand] = 0.0
-        else:
-            # Use first token probability (standard in LM classification)
-            cand_probs[cand] = probs[token_ids[0]].item()
+            logps[cand] = log_prob.item()
 
-    # normalize over candidates
-    Z = sum(cand_probs.values())
-    if Z == 0:
-        return {c: 1 / len(CANDIDATES) for c in CANDIDATES}
+    # normalize
+    max_logp = max(logps.values())
+    exp_probs = {k: np.exp(v - max_logp) for k, v in logps.items()}
+    Z = sum(exp_probs.values())
 
-    return {k: v / Z for k, v in cand_probs.items()}
-
+    return {k: v / Z for k, v in exp_probs.items()}
 
 
 def accuracy_from_probs(probs, ground_truth):
