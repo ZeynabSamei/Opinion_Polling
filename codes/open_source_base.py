@@ -171,6 +171,8 @@ for idx, entry in tqdm(enumerate(data), total=len(data)):
     time.sleep(args.sleep)
 
 df_final = pd.DataFrame(results)
+for r in results:
+    print(r["ground_truth"], r["predicted_vote"], r["probs"])
 
 # -----------------------------
 # Metrics
