@@ -87,11 +87,8 @@ def normalize_vote(text):
     if text is None: return None
     t = text.lower().strip()
     if "trump" in t: return "Donald Trump"
-    if "donald" in t: return "Donald Trump"
     if "biden" in t: return "Joe Biden"
-    if "joe" in t: return "Joe Biden"
     if "harris" in t: return "Kamala Harris"
-    if "kamala" in t: return "Kamala Harris"
     return None
 
 def extract_ground_truth(messages):
@@ -100,30 +97,34 @@ def extract_ground_truth(messages):
             return normalize_vote(m["content"])
     return None
 
-def get_vote_probs(messages, max_new_tokens=3):
+def get_vote_probs(messages, max_new_tokens=10):
     """
-    Compute candidate probabilities using the model output.
+    Compute candidate probabilities using full candidate token sequences.
     """
     clean_msgs = strip_assistant_messages(messages)
     prompt = "\n".join(f"{m['role']}: {m['content']}" for m in clean_msgs)
-
     inputs = tokenizer(prompt, return_tensors="pt").to(device)
-    with torch.no_grad():
-        output = model.generate(
-            **inputs,
-            max_new_tokens=max_new_tokens,
-            do_sample=False
-        )
-    # decode generated tokens
-    gen_tokens = output[0, inputs["input_ids"].shape[1]:]
-    gen_text = tokenizer.decode(gen_tokens).strip()
-    pred_candidate = normalize_vote(gen_text)
 
-    probs = {c: 1.0 if c == pred_candidate else 0.0 for c in CANDIDATES}
-    # fallback uniform
-    if sum(probs.values()) == 0:
-        probs = {c: 1/len(CANDIDATES) for c in CANDIDATES}
-    return probs
+    with torch.no_grad():
+        output = model(**inputs)
+        logits = output.logits[0]  # [seq_len, vocab_size]
+
+    candidate_probs = {}
+    for cand in CANDIDATES:
+        token_ids = tokenizer.encode(cand, add_special_tokens=False)
+        prob = 1.0
+        for i, tid in enumerate(token_ids):
+            next_idx = inputs["input_ids"].shape[1] + i
+            if next_idx >= logits.shape[0]:
+                # prevent index error
+                break
+            token_prob = torch.softmax(logits[next_idx], dim=-1)[tid].item()
+            prob *= token_prob
+        candidate_probs[cand] = prob
+
+    Z = sum(candidate_probs.values())
+    candidate_probs = {k: v / Z for k, v in candidate_probs.items()}
+    return candidate_probs
 
 def accuracy_from_probs(probs, ground_truth):
     return int(max(probs, key=probs.get) == ground_truth)
@@ -149,7 +150,6 @@ for idx, entry in tqdm(enumerate(data), total=len(data)):
     pred = max(probs, key=probs.get)
     mi = mutual_information(probs, gt)
     acc = accuracy_from_probs(probs, gt)
-    print(pred)
 
     results.append({
         "idx": idx,
@@ -161,20 +161,19 @@ for idx, entry in tqdm(enumerate(data), total=len(data)):
         "mutual_inf": mi
     })
 
-
     if (idx+1) % args.save_every == 0:
         df_tmp = pd.DataFrame(results)
-        save_path = os.path.join(args.out_dir, f"{args.model_name.replace('/', '_')}_{args.election_year}_partial.pkl")
+        save_path = os.path.join(args.out_dir,
+                                 f"{args.model_name.replace('/', '_')}_{args.election_year}_partial.pkl")
         df_tmp.to_pickle(save_path)
         print(f"Saved intermediate results at index {idx} to {save_path}")
 
     time.sleep(args.sleep)
 
 df_final = pd.DataFrame(results)
-for r in results:
-    print(r["ground_truth"], r["predicted_vote"], r["probs"])
+
 # -----------------------------
-# Compute vote metrics
+# Metrics
 # -----------------------------
 anes_votes = df_final['ground_truth'].map(vote_to_numeric).to_numpy()
 gpt_votes = df_final['predicted_vote'].map(vote_to_numeric).to_numpy()
