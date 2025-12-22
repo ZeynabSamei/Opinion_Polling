@@ -286,9 +286,27 @@ random.seed(args.seed)
 np.random.seed(args.seed)
 torch.manual_seed(args.seed)
 
+
 # -----------------------------
-# Candidates
+# Load dataset
 # -----------------------------
+with open(args.data_path, "r") as f:
+    data = json.load(f)
+random.shuffle(data)
+print(f"Loaded {len(data)} samples")
+
+# -----------------------------
+# Load model
+# -----------------------------
+print(f"Loading model {args.model_name} ...")
+tokenizer = AutoTokenizer.from_pretrained(args.model_name)
+model = AutoModelForCausalLM.from_pretrained(
+    args.model_name,
+    device_map="auto",
+    torch_dtype=torch.float16
+)
+model.eval()
+
 # -----------------------------
 # Election year → candidates
 # -----------------------------
@@ -315,26 +333,6 @@ print("\nCandidate tokenization:")
 for c, ids in CAND_TOKEN_IDS.items():
     print(f"{c}: {ids} -> '{tokenizer.decode(ids)}'")
 
-
-# -----------------------------
-# Load dataset
-# -----------------------------
-with open(args.data_path, "r") as f:
-    data = json.load(f)
-random.shuffle(data)
-print(f"Loaded {len(data)} samples")
-
-# -----------------------------
-# Load model
-# -----------------------------
-print(f"Loading model {args.model_name} ...")
-tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-model = AutoModelForCausalLM.from_pretrained(
-    args.model_name,
-    device_map="auto",
-    torch_dtype=torch.float16
-)
-model.eval()
 
 # -----------------------------
 # Helper functions
