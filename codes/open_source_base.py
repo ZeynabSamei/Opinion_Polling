@@ -289,11 +289,32 @@ torch.manual_seed(args.seed)
 # -----------------------------
 # Candidates
 # -----------------------------
+# -----------------------------
+# Election year → candidates
+# -----------------------------
 if args.election_year == 2020:
     CANDIDATES = ["Donald Trump", "Joe Biden"]
 elif args.election_year == 2024:
     CANDIDATES = ["Donald Trump", "Kamala Harris"]
+else:
+    raise ValueError(f"Unsupported election_year: {args.election_year}")
+
 CANDIDATES_NORM = [c.lower() for c in CANDIDATES]
+
+# -----------------------------
+# Candidate token IDs (for real probabilities)
+# -----------------------------
+CAND_TOKEN_IDS = {}
+for cand in CANDIDATES:
+    token_ids = tokenizer.encode(cand, add_special_tokens=False)
+    if len(token_ids) == 0:
+        raise ValueError(f"Candidate '{cand}' has no tokens")
+    CAND_TOKEN_IDS[cand] = token_ids
+
+print("\nCandidate tokenization:")
+for c, ids in CAND_TOKEN_IDS.items():
+    print(f"{c}: {ids} -> '{tokenizer.decode(ids)}'")
+
 
 # -----------------------------
 # Load dataset
