@@ -335,32 +335,53 @@ def extract_ground_truth(messages):
             return normalize_vote(m["content"])
     return None
 
-def get_vote_probs(messages, max_new_tokens=5):
+# def get_vote_probs(messages, max_new_tokens=5):
+#     clean_msgs = strip_assistant_messages(messages)
+#     prompt = "\n".join(f"{m['role']}: {m['content']}" for m in clean_msgs)
+#     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+
+#     with torch.no_grad():
+#         output = model.generate(
+#             **inputs,
+#             max_new_tokens=max_new_tokens,
+#             do_sample=False,
+#             return_dict_in_generate=True,
+#             output_scores=False
+#         )
+
+#     token_id = output.sequences[0, inputs["input_ids"].shape[1]]
+#     token_str = tokenizer.decode(token_id).lower()
+
+#     probs = {c: 0.0 for c in CANDIDATES}
+#     for c in CANDIDATES:
+#         if c.lower() in token_str:
+#             probs[c] = 1.0
+#     if sum(probs.values()) == 0:
+#         probs = {c: 1/len(CANDIDATES) for c in CANDIDATES}
+
+#     Z = sum(probs.values())
+#     return {k: v/Z for k,v in probs.items()}
+
+def get_vote_probs(messages):
     clean_msgs = strip_assistant_messages(messages)
     prompt = "\n".join(f"{m['role']}: {m['content']}" for m in clean_msgs)
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
 
+    inputs = tokenizer(prompt, return_tensors="pt").to(device)
     with torch.no_grad():
-        output = model.generate(
-            **inputs,
-            max_new_tokens=max_new_tokens,
-            do_sample=False,
-            return_dict_in_generate=True,
-            output_scores=False
-        )
+        outputs = model(**inputs)
+        logits = outputs.logits[0, -1, :]
+        probs = torch.softmax(logits, dim=-1)
 
-    token_id = output.sequences[0, inputs["input_ids"].shape[1]]
-    token_str = tokenizer.decode(token_id).lower()
-
-    probs = {c: 0.0 for c in CANDIDATES}
+    cand_probs = {}
     for c in CANDIDATES:
-        if c.lower() in token_str:
-            probs[c] = 1.0
-    if sum(probs.values()) == 0:
-        probs = {c: 1/len(CANDIDATES) for c in CANDIDATES}
+        token_ids = tokenizer.encode(c, add_special_tokens=False)
+        cand_probs[c] = probs[token_ids[0]].item() if token_ids else 0.0
 
-    Z = sum(probs.values())
-    return {k: v/Z for k,v in probs.items()}
+    if sum(cand_probs.values()) == 0:
+        cand_probs = {c: 1 / len(CANDIDATES) for c in CANDIDATES}
+
+    Z = sum(cand_probs.values())
+    return {k: v / Z for k, v in cand_probs.items()}
 
 def accuracy_from_probs(probs, ground_truth):
     return int(max(probs, key=probs.get) == ground_truth)
