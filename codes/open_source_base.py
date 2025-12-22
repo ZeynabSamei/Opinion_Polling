@@ -325,8 +325,12 @@ def normalize_vote(text):
     if text is None: return None
     t = text.lower().strip()
     if "trump" in t: return "Donald Trump"
+    if "donald" in t: return "Donald Trump"
     if "biden" in t: return "Joe Biden"
+    if "joe" in t: return "Joe Biden"
     if "harris" in t: return "Kamala Harris"
+    if "kamala" in t: return "Kamala Harris"
+        
     return None
 
 def extract_ground_truth(messages):
@@ -335,32 +339,40 @@ def extract_ground_truth(messages):
             return normalize_vote(m["content"])
     return None
 
-def get_vote_probs(messages):
+def get_vote_probs(messages, max_new_tokens=10):
+    """
+    Generate vote probabilities for the given messages.
+    Handles multi-token candidate names and normalizes output.
+    """
     clean_msgs = strip_assistant_messages(messages)
     prompt = "\n".join(f"{m['role']}: {m['content']}" for m in clean_msgs)
+
     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-
     with torch.no_grad():
-        outputs = model(**inputs)
-        logits = outputs.logits[0, -1, :]
-        probs_all = torch.softmax(logits, dim=-1)
+        output = model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            do_sample=False,          # deterministic
+            output_scores=False,
+            return_dict_in_generate=True
+        )
 
-    cand_probs = {}
-    for c in CANDIDATES:
-        token_ids = tokenizer.encode(c, add_special_tokens=False)
-        if token_ids:
-            # take average probability of all tokens in candidate name
-            p = probs_all[token_ids].mean().item()
-            cand_probs[c] = p
-        else:
-            cand_probs[c] = 0.0
+    # decode all generated tokens
+    token_ids = output.sequences[0, inputs["input_ids"].shape[1]:]
+    token_str = tokenizer.decode(token_ids).lower()
 
-    # fallback uniform if sum=0
-    if sum(cand_probs.values()) == 0:
-        cand_probs = {c: 1/len(CANDIDATES) for c in CANDIDATES}
+    # normalize candidate
+    predicted_vote = normalize_vote(token_str)
 
-    Z = sum(cand_probs.values())
-    return {k: v/Z for k, v in cand_probs.items()}
+    # fallback: uniform if model output not recognized
+    probs = {c: 0.0 for c in CANDIDATES}
+    if predicted_vote in CANDIDATES:
+        probs[predicted_vote] = 1.0
+    else:
+        probs = {c: 1 / len(CANDIDATES) for c in CANDIDATES}
+
+    return probs
+
 
 def accuracy_from_probs(probs, ground_truth):
     return int(max(probs, key=probs.get) == ground_truth)
