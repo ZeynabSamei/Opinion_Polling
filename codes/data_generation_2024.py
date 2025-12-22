@@ -31,13 +31,13 @@ csv_filename   = OUTPUT_DIR / "anes_2024_chat_finetune.csv"
 df = pd.read_csv(file_path)
 
 COLS_MAP = {
-    "V242096x": "vote_choice", ##
-    "V241550": "gender", ##
-    "V241501x": "race", ##
-    "V241458x": "age", ##
-    "V241177": "ideology", ##
-    "V242400": "pol_interest",##
-    "V241439": "church_attendance", ##
+    "V242096x": "vote_choice", 
+    "V241550": "gender", 
+    "V241501x": "race", 
+    "V241458x": "age", 
+    "V241177": "ideology", 
+    "V242400": "pol_interest",
+    "V241439": "church_attendance", 
 }
 
 
