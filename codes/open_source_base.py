@@ -59,7 +59,7 @@ torch.manual_seed(SEED)
 # ==========================================
 with open(args.data_path, "r") as f:
     data = json.load(f)
-data = data[:3]  # optional, remove in full dataset
+data = data[:30]  # optional, remove in full dataset
 df_primary = pd.DataFrame(data)
 df_primary['raw_idx'] = list(range(len(data)))
 
