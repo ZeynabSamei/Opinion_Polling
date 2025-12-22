@@ -170,7 +170,7 @@ df_final = df_input.merge(
     on="raw_idx",
     how="left"
 )
-
+print(df_final.columns)
 # ==========================================
 # Save final dataframe
 # ==========================================
