@@ -171,8 +171,8 @@ def vote_to_numeric(vote):
 results = []
 for idx, entry in tqdm(enumerate(data), total=len(data)):
     messages = entry.get("messages", [])
-    gt = extract_ground_truth(messages)
-    if gt is None or gt.lower() not in CANDIDATES_NORM:
+    ground_truth = extract_ground_truth(messages)
+    if ground_truth is None or ground_truth.lower() not in CANDIDATES_NORM:
         continue
 
 
@@ -180,14 +180,14 @@ for idx, entry in tqdm(enumerate(data), total=len(data)):
     probs = get_vote_probs(messages)
     pred = max(probs, key=probs.get)  # predicted candidate
     mi = -np.log2(probs[ground_truth])  # mutual information
-    acc = accuracy_from_probs(probs, gt)
+    acc = accuracy_from_probs(probs, ground_truth)
 
     print(pred)
 
     results.append({
         "idx": idx,
         "messages": messages,
-        "ground_truth": gt,
+        "ground_truth": ground_truth,
         "predicted_vote": pred,
         "probs": probs,
         "accuracy": acc,
