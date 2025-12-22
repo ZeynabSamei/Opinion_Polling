@@ -47,7 +47,7 @@ torch.manual_seed(SEED)
 with open(args.data_path, "r") as f:
     data = json.load(f)
 data=data[:3]
-
+df_primary=pd.DataFrame(data)
 # Build input dataframe (preserve order)
 df_input = pd.DataFrame({
     "raw_idx": list(range(len(data))),
@@ -165,7 +165,7 @@ print(df_results[["accuracy", "mutual_inf"]].describe())
 # Merge with input dataframe
 # ==========================================
 
-df_final = df_input.merge(
+df_final = df_primary.merge(
     df_results,
     on="raw_idx",
     how="left"
