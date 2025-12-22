@@ -312,26 +312,29 @@ device = model.device if hasattr(model, "device") else next(model.parameters()).
 # Election year → candidates
 # -----------------------------
 if args.election_year == 2020:
-    CANDIDATES = ["Donald Trump", "Joe Biden"]
+    LABELS = {
+        "A": "Donald Trump",
+        "B": "Joe Biden"
+    }
 elif args.election_year == 2024:
-    CANDIDATES = ["Donald Trump", "Kamala Harris"]
+    LABELS = {
+        "A": "Donald Trump",
+        "B": "Kamala Harris"
+    }
 else:
     raise ValueError(f"Unsupported election_year: {args.election_year}")
 
-CANDIDATES_NORM = [c.lower() for c in CANDIDATES]
-
 # -----------------------------
-# Candidate token IDs (for real probabilities)
+# Candidate token IDs (for single-token A/B labels)
 # -----------------------------
-
-CAND_TOKEN_IDS = {
-    cand: tokenizer.encode(cand, add_special_tokens=False)
-    for cand in CANDIDATES
+LABEL_TOKEN_IDS = {
+    k: tokenizer.encode(k, add_special_tokens=False)[0]  # only first token
+    for k in LABELS
 }
 
-print("\nCandidate tokenization:")
-for c, ids in CAND_TOKEN_IDS.items():
-    print(f"{c}: {ids} -> '{tokenizer.decode(ids)}'")
+print("\nLabel tokenization:")
+for label, token_id in LABEL_TOKEN_IDS.items():
+    print(f"{label}: {token_id} -> '{LABELS[label]}'")
 
 
 # -----------------------------
@@ -358,49 +361,36 @@ def extract_ground_truth(messages):
             return normalize_vote(m["content"])
     return None
 
-def get_vote_probs(messages, eps=1e-12):
-    clean_msgs = strip_assistant_messages(messages)
-    prompt = "\n".join(f"{m['role']}: {m['content']}" for m in clean_msgs)
-
-    inputs = tokenizer(prompt, return_tensors="pt").to(device)
-    input_ids = inputs["input_ids"]
-
-    logps = {}
-
+def get_vote_probs(messages, max_new_tokens=1):
+    """
+    Get probabilities for A/B labels using the model.
+    Messages: list of dicts {"role":..., "content":...}
+    Returns: dict {candidate_name: probability}
+    """
+    clean_messages = strip_assistant_messages(messages)
+    prompt = "\n".join(f"{m['role']}: {m['content']}" for m in clean_messages)
+    
+    # Tokenize input
+    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+    
+    # Generate next token logits
     with torch.no_grad():
-        outputs = model(input_ids=input_ids)
-        logits = outputs.logits
+        outputs = model(**inputs)
+        logits = outputs.logits[0, -1, :]  # last token logits
+        probs_all = torch.softmax(logits, dim=-1)
 
-    for cand, cand_ids in CAND_TOKEN_IDS.items():
-        cand_ids = torch.tensor(cand_ids, device=device)
+    # Extract probabilities for A/B labels
+    probs = {}
+    for label, token_id in LABEL_TOKEN_IDS.items():
+        probs[label] = probs_all[token_id].item()
 
-        total_logp = 0.0
-        context_ids = input_ids.clone()
+    # Normalize
+    Z = sum(probs.values())
+    probs = {k: v / Z for k, v in probs.items()}
 
-        for tok in cand_ids:
-            outputs = model(input_ids=context_ids)
-            next_logits = outputs.logits[0, -1]
-            log_probs = torch.log_softmax(next_logits, dim=-1)
-
-            total_logp += log_probs[tok].item()
-
-            context_ids = torch.cat(
-                [context_ids, tok.view(1, 1)], dim=1
-            )
-
-        logps[cand] = total_logp
-
-    # log-softmax over candidates
-    max_logp = max(logps.values())
-    exp_probs = {
-        c: np.exp(lp - max_logp)
-        for c, lp in logps.items()
-    }
-
-    Z = sum(exp_probs.values()) + eps
-    probs = {c: v / Z for c, v in exp_probs.items()}
-
-    return probs
+    # Map back to candidate names
+    probs_named = {LABELS[k]: v for k, v in probs.items()}
+    return probs_named
 
 
 def accuracy_from_probs(probs, ground_truth):
@@ -427,10 +417,12 @@ for idx, entry in tqdm(enumerate(data), total=len(data)):
     if gt is None or gt.lower() not in CANDIDATES_NORM:
         continue
 
+
     probs = get_vote_probs(messages)
+    pred = max(probs, key=probs.get)  # predicted candidate
+    mi = -np.log2(probs[normalize_vote(pred)])  # mutual information
     acc = accuracy_from_probs(probs, gt)
-    mi = mutual_information(probs, gt)
-    pred = max(probs, key=probs.get)
+
     print(pred)
 
     results.append({
