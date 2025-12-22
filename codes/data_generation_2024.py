@@ -31,15 +31,15 @@ csv_filename   = OUTPUT_DIR / "anes_2024_chat_finetune.csv"
 df = pd.read_csv(file_path)
 
 COLS_MAP = {
-    "V202110x": "vote_choice",
-    "V201600": "gender",
-    "V201549x": "race",
-    "V201507x": "age",
-    "V201200": "ideology",
-    "V201231x": "party_id",
-    "V202406": "pol_interest",
-    "V201452": "church_attendance",
-    "V202022": "discuss_politics"
+    "V242096x": "vote_choice", ##
+    "V241550": "gender", ##
+    "V241501x": "race", ##
+    "V241458x": "age", ##
+    "V241177": "ideology", ##
+    "V241226": "party_id", ##
+    "V242400": "pol_interest",##
+    "V241439": "church_attendance", ##
+    "V241708": "discuss_politics"  ## needs change in code
 }
 
 df = df[list(COLS_MAP.keys())].rename(columns=COLS_MAP)
