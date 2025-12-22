@@ -44,7 +44,6 @@ random.seed(args.seed)
 np.random.seed(args.seed)
 torch.manual_seed(args.seed)
 
-
 # -----------------------------
 # Load dataset
 # -----------------------------
@@ -70,33 +69,13 @@ device = model.device if hasattr(model, "device") else next(model.parameters()).
 # Election year → candidates
 # -----------------------------
 if args.election_year == 2020:
-    LABELS = {
-        "A": "Donald Trump",
-        "B": "Joe Biden"
-    }
+    CANDIDATES = ["Donald Trump", "Joe Biden"]
 elif args.election_year == 2024:
-    LABELS = {
-        "A": "Donald Trump",
-        "B": "Kamala Harris"
-    }
+    CANDIDATES = ["Donald Trump", "Kamala Harris"]
 else:
     raise ValueError(f"Unsupported election_year: {args.election_year}")
 
-CANDIDATES = list(LABELS.values())
-CANDIDATES_NORM = [c.lower() for c in CANDIDATES]  # normalize for checking ground truth
-
-# -----------------------------
-# Candidate token IDs (for single-token A/B labels)
-# -----------------------------
-LABEL_TOKEN_IDS = {
-    k: tokenizer.encode(v, add_special_tokens=False)[0]  # first token of candidate name
-    for k, v in LABELS.items()
-}
-
-print("\nLabel tokenization:")
-for label, token_id in LABEL_TOKEN_IDS.items():
-    print(f"{label}: {token_id} -> '{LABELS[label]}'")
-
+CANDIDATES_NORM = [c.lower() for c in CANDIDATES]
 
 # -----------------------------
 # Helper functions
@@ -113,7 +92,6 @@ def normalize_vote(text):
     if "joe" in t: return "Joe Biden"
     if "harris" in t: return "Kamala Harris"
     if "kamala" in t: return "Kamala Harris"
-        
     return None
 
 def extract_ground_truth(messages):
@@ -122,45 +100,37 @@ def extract_ground_truth(messages):
             return normalize_vote(m["content"])
     return None
 
-def get_vote_probs(messages, max_new_tokens=1):
+def get_vote_probs(messages, max_new_tokens=3):
     """
-    Compute candidate probabilities using the model and label tokens A/B.
-    messages: list of dicts {"role": ..., "content": ...}
-    returns: dict {candidate_name: probability}
+    Compute candidate probabilities using the model output.
     """
-    clean_msgs = [m for m in messages if m['role'] != 'assistant']
+    clean_msgs = strip_assistant_messages(messages)
     prompt = "\n".join(f"{m['role']}: {m['content']}" for m in clean_msgs)
 
-    # Tokenize prompt
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-
-    # Generate one token (A or B)
+    inputs = tokenizer(prompt, return_tensors="pt").to(device)
     with torch.no_grad():
-        output = model(**inputs)
-        logits = output.logits[0, -1, :]  # last token logits
+        output = model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            do_sample=False
+        )
+    # decode generated tokens
+    gen_tokens = output[0, inputs["input_ids"].shape[1]:]
+    gen_text = tokenizer.decode(gen_tokens).strip()
+    pred_candidate = normalize_vote(gen_text)
 
-    # Grab logits for A/B labels only
-    label_logits = torch.tensor([logits[LABEL_TOKEN_IDS[k]] for k in LABEL_TOKEN_IDS])
-    
-    # Softmax to get probabilities
-    probs_array = torch.softmax(label_logits, dim=0).cpu().numpy()
-    
-    # Map back to candidate names
-    probs = {LABELS[k]: float(probs_array[i]) for i, k in enumerate(LABEL_TOKEN_IDS)}
+    probs = {c: 1.0 if c == pred_candidate else 0.0 for c in CANDIDATES}
+    # fallback uniform
+    if sum(probs.values()) == 0:
+        probs = {c: 1/len(CANDIDATES) for c in CANDIDATES}
     return probs
-
-
 
 def accuracy_from_probs(probs, ground_truth):
     return int(max(probs, key=probs.get) == ground_truth)
 
 def mutual_information(probs, ground_truth, eps=1e-12):
-    """
-    MI contribution: -log2 P(y | x)
-    """
     p = max(probs.get(ground_truth, eps), eps)
     return -np.log2(p)
-
 
 def vote_to_numeric(vote):
     return 0 if vote.lower() == CANDIDATES[1].lower() else 1
@@ -171,23 +141,19 @@ def vote_to_numeric(vote):
 results = []
 for idx, entry in tqdm(enumerate(data), total=len(data)):
     messages = entry.get("messages", [])
-    ground_truth = extract_ground_truth(messages)
-    if ground_truth is None or ground_truth.lower() not in CANDIDATES_NORM:
+    gt = extract_ground_truth(messages)
+    if gt is None or gt.lower() not in CANDIDATES_NORM:
         continue
 
-
-
     probs = get_vote_probs(messages)
-    pred = max(probs, key=probs.get)  # predicted candidate
-    mi = -np.log2(probs[ground_truth])  # mutual information
-    acc = accuracy_from_probs(probs, ground_truth)
-
-    print(pred)
+    pred = max(probs, key=probs.get)
+    mi = mutual_information(probs, gt)
+    acc = accuracy_from_probs(probs, gt)
 
     results.append({
         "idx": idx,
         "messages": messages,
-        "ground_truth": ground_truth,
+        "ground_truth": gt,
         "predicted_vote": pred,
         "probs": probs,
         "accuracy": acc,
@@ -205,7 +171,7 @@ for idx, entry in tqdm(enumerate(data), total=len(data)):
 df_final = pd.DataFrame(results)
 
 # -----------------------------
-# Compute vote correspondence metrics
+# Compute vote metrics
 # -----------------------------
 anes_votes = df_final['ground_truth'].map(vote_to_numeric).to_numpy()
 gpt_votes = df_final['predicted_vote'].map(vote_to_numeric).to_numpy()
@@ -245,8 +211,6 @@ print(f"Saved final results to {out_file}")
 print("\nSummary:")
 MI = np.mean([r["mutual_inf"] for r in results])
 print("Average accuracy:", df_final["accuracy"].mean())
-# print("Average mutual information:", df_final["mutual_inf"].mean())
 print(f"Average mutual information: {MI:.3f}")
 for k,v in vote_metrics.items():
     print(f"{k}: {v}")
-
