@@ -59,6 +59,7 @@ torch.manual_seed(SEED)
 # ==========================================
 with open(args.data_path, "r") as f:
     data = json.load(f)
+data=data[:50]
 
 df_primary = pd.DataFrame(data)
 df_primary['raw_idx'] = list(range(len(data)))
@@ -137,30 +138,40 @@ def compute_vote_metrics(anes_votes, gpt_probs):
     results = {}
 
     # Tetrachoric correlation
-    if tetra_available:
-        data = np.column_stack([anes_votes, gpt_votes])
-        results['tetrachoric'] = calculate_tetrachoric(data)
-    else:
+    try:
+        if tetra_available and len(np.unique(anes_votes)) > 1 and len(np.unique(gpt_votes)) > 1:
+            df_votes = pd.DataFrame({'anes': anes_votes, 'gpt': gpt_votes})
+            tetra_corr = calculate_tetrachoric(df_votes)
+            results['tetrachoric'] = tetra_corr[0,1]  # off-diagonal correlation
+        else:
+            results['tetrachoric'] = None
+    except Exception as e:
+        print(f"Warning: could not compute tetrachoric correlation: {e}")
         results['tetrachoric'] = None
 
     # Cohen's Kappa
     results['cohen_kappa'] = cohen_kappa_score(anes_votes, gpt_votes)
 
     # ICC
-    if icc_available:
-        df_temp = pd.DataFrame({'anes': anes_votes, 'gpt': gpt_votes})
-        df_long = df_temp.reset_index().melt(id_vars='index', value_vars=['anes','gpt'],
-                                            var_name='rater', value_name='vote')
-        icc_df = pg.intraclass_corr(data=df_long, targets='index', raters='rater', ratings='vote')
-        icc_value = icc_df.loc[icc_df['Type']=='ICC2k','ICC'].values[0]
-        results['ICC'] = icc_value
-    else:
+    try:
+        if icc_available and len(np.unique(anes_votes)) > 1 and len(np.unique(gpt_votes)) > 1:
+            df_temp = pd.DataFrame({'anes': anes_votes, 'gpt': gpt_votes})
+            df_long = df_temp.reset_index().melt(id_vars='index', value_vars=['anes','gpt'],
+                                                var_name='rater', value_name='vote')
+            icc_df = pg.intraclass_corr(data=df_long, targets='index', raters='rater', ratings='vote')
+            icc_value = icc_df.loc[icc_df['Type']=='ICC2k','ICC'].values[0]
+            results['ICC'] = icc_value
+        else:
+            results['ICC'] = None
+    except Exception as e:
+        print(f"Warning: could not compute ICC: {e}")
         results['ICC'] = None
 
     # Proportion agreement
     results['proportion_agreement'] = np.mean(anes_votes == gpt_votes)
 
     return results
+
 
 # ==========================================
 # Inference loop
