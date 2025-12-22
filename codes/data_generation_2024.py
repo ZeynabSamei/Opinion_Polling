@@ -36,18 +36,20 @@ COLS_MAP = {
     "V241501x": "race", ##
     "V241458x": "age", ##
     "V241177": "ideology", ##
-    "V241226": "party_id", ##
     "V242400": "pol_interest",##
     "V241439": "church_attendance", ##
-    "V241708": "discuss_politics"  ## needs change in code
 }
+
 
 df = df[list(COLS_MAP.keys())].rename(columns=COLS_MAP)
 
 FEATURE_COLS = [c for c in df.columns if c != "vote_choice"]
 
 df = df[(df[FEATURE_COLS] >= 0).all(axis=1)]
+
 df = df[df["vote_choice"].isin([1, 2])].copy()
+
+
 
 print("Final dataset size:", df.shape)
 
@@ -68,29 +70,16 @@ IDEOLOGY_MAP = {
     6: "conservative", 7: "extremely conservative"
 }
 
-PARTY_MAP = {
-    1: "a strong Democrat",
-    2: "not a very strong Democrat",
-    3: "an independent Democrat",
-    4: "an independent",
-    5: "an independent Republican",
-    6: "not a very strong Republican",
-    7: "a strong Republican"
-}
 
 INTEREST_MAP = {
     1: "very", 2: "somewhat",
     3: "not very", 4: "not at all"
 }
 
-DISCUSS_MAP = {
-    1: "I like to discuss politics with my family and friends.",
-    2: "I never discuss politics with my family or friends."
-}
 
 CHURCH_MAP = {
-    1: "do not attend church",
-    2: "attend church"
+    2: "do not attend church",
+    1: "attend church"
 }
 
 # ==========================================
@@ -100,7 +89,7 @@ CHURCH_MAP = {
 SYSTEM_PROMPT = (
     "You are an expert political analyst specializing in US elections and voting behavior. "
     "Your task is to analyze the demographic profile provided in the text and predict the vote "
-    "choice in the 2020 Election. Output strictly one name: 'Donald Trump' or 'Joe Biden'."
+    "choice in the 2024 Election. Output strictly one name: 'Donald Trump' or 'Kamala Harris'."
 )
 
 chat_data = []
@@ -117,10 +106,8 @@ for _, row in df.iterrows():
             "gender": GENDER_MAP[row["gender"]],
             "age": int(row["age"]),
             "ideology": IDEOLOGY_MAP[row["ideology"]],
-            "party_id": PARTY_MAP[row["party_id"]],
             "church_attendance": CHURCH_MAP[row["church_attendance"]],
             "pol_interest": INTEREST_MAP[row["pol_interest"]],
-            "discuss_politics": DISCUSS_MAP[row["discuss_politics"]],
         }
 
         user_text = (
@@ -128,15 +115,13 @@ for _, row in df.iterrows():
             f"I am a {text_features['gender']}. "
             f"I am {text_features['age']} years old. "
             f"Ideologically, I am {text_features['ideology']}. "
-            f"Politically, I am {text_features['party_id']}. "
             f"I {text_features['church_attendance']}. "
             f"I am {text_features['pol_interest']} interested in politics. "
-            f"{text_features['discuss_politics']} "
-            "In the 2020 presidential election, I voted for "
+
         )
 
         assistant_text = (
-            "Joe Biden" if row["vote_choice"] == 1 else "Donald Trump"
+            "Kamala Harris" if row["vote_choice"] == 1 else "Donald Trump"
         )
 
         chat_data.append({
@@ -167,6 +152,7 @@ SEED = 42
 random.seed(SEED)
 
 combined = list(zip(chat_data, csv_rows))
+print(combined)
 random.shuffle(combined)
 chat_data, csv_rows = zip(*combined)
 
