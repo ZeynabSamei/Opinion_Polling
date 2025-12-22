@@ -12,19 +12,12 @@ from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from sklearn.metrics import cohen_kappa_score
 
-# Optional packages
-try:
-    from factor_analyzer import calculate_tetrachoric
-    tetra_available = True
-except ImportError:
-    print("factor_analyzer not installed, tetrachoric correlation will be skipped")
-    tetra_available = False
-
+# Optional package
 try:
     import pingouin as pg
     icc_available = True
 except ImportError:
-    print("pingouin not installed, ICC will be skipped")
+    print("pingouin not installed, ICC and tetrachoric will be skipped")
     icc_available = False
 
 # ==========================================
@@ -62,8 +55,7 @@ torch.manual_seed(SEED)
 
 with open(args.data_path, "r") as f:
     data = json.load(f)
-
-data=data[:100]
+data=data[:50]
 
 df_primary = pd.DataFrame(data)
 df_primary['raw_idx'] = list(range(len(data)))
@@ -185,7 +177,7 @@ df_final = df_primary.merge(
 # Compute vote correspondence metrics
 # ==========================================
 
-# Convert votes to numeric 0/1 for tetrachoric
+# Convert votes to numeric 0/1
 def vote_to_numeric(vote):
     return 0 if vote.lower() == "joe biden" else 1
 
@@ -194,16 +186,15 @@ gpt_votes = df_final['predicted_vote'].dropna().map(vote_to_numeric).to_numpy()
 
 vote_metrics = {}
 
-# Tetrachoric correlation
-try:
-    if tetra_available and len(np.unique(anes_votes)) > 1 and len(np.unique(gpt_votes)) > 1:
-        df_votes = pd.DataFrame({'anes': anes_votes, 'gpt': gpt_votes})
-        tetra_corr = calculate_tetrachoric(df_votes)
-        vote_metrics['tetrachoric'] = tetra_corr[0,1]
-    else:
+if icc_available and len(np.unique(anes_votes)) > 1 and len(np.unique(gpt_votes)) > 1:
+    # Tetrachoric correlation using pingouin
+    try:
+        tetra_corr = pg.tetrachoric(anes_votes, gpt_votes)
+        vote_metrics['tetrachoric'] = tetra_corr
+    except Exception as e:
+        print(f"Warning: could not compute tetrachoric: {e}")
         vote_metrics['tetrachoric'] = None
-except Exception as e:
-    print(f"Warning: could not compute tetrachoric correlation: {e}")
+else:
     vote_metrics['tetrachoric'] = None
 
 # Cohen's Kappa
@@ -211,15 +202,12 @@ vote_metrics['cohen_kappa'] = cohen_kappa_score(anes_votes, gpt_votes)
 
 # ICC
 try:
-    if icc_available and len(np.unique(anes_votes)) > 1 and len(np.unique(gpt_votes)) > 1:
-        df_temp = pd.DataFrame({'anes': anes_votes, 'gpt': gpt_votes})
-        df_long = df_temp.reset_index().melt(id_vars='index', value_vars=['anes','gpt'],
-                                            var_name='rater', value_name='vote')
-        icc_df = pg.intraclass_corr(data=df_long, targets='index', raters='rater', ratings='vote')
-        icc_value = icc_df.loc[icc_df['Type']=='ICC2k','ICC'].values[0]
-        vote_metrics['ICC'] = icc_value
-    else:
-        vote_metrics['ICC'] = None
+    df_temp = pd.DataFrame({'anes': anes_votes, 'gpt': gpt_votes})
+    df_long = df_temp.reset_index().melt(id_vars='index', value_vars=['anes','gpt'],
+                                        var_name='rater', value_name='vote')
+    icc_df = pg.intraclass_corr(data=df_long, targets='index', raters='rater', ratings='vote')
+    icc_value = icc_df.loc[icc_df['Type']=='ICC2k','ICC'].values[0]
+    vote_metrics['ICC'] = icc_value
 except Exception as e:
     print(f"Warning: could not compute ICC: {e}")
     vote_metrics['ICC'] = None
@@ -227,8 +215,8 @@ except Exception as e:
 # Proportion agreement
 vote_metrics['proportion_agreement'] = np.mean(anes_votes == gpt_votes)
 
-# Add metrics to dataframe for saving
-for k, v in vote_metrics.items():
+# Add metrics to dataframe
+for k,v in vote_metrics.items():
     df_final[k] = v
 
 # ==========================================
