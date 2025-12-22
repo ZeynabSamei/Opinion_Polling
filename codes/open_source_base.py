@@ -339,47 +339,50 @@ def extract_ground_truth(messages):
             return normalize_vote(m["content"])
     return None
 
-def get_vote_probs(messages, max_new_tokens=10):
+def get_vote_probs(messages):
     """
-    Generate vote probabilities for the given messages.
-    Handles multi-token candidate names and normalizes output.
+    Returns P(candidate | context) using next-token logits.
     """
     clean_msgs = strip_assistant_messages(messages)
     prompt = "\n".join(f"{m['role']}: {m['content']}" for m in clean_msgs)
 
     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+
     with torch.no_grad():
-        output = model.generate(
-            **inputs,
-            max_new_tokens=max_new_tokens,
-            do_sample=False,          # deterministic
-            output_scores=False,
-            return_dict_in_generate=True
-        )
+        outputs = model(**inputs)
 
-    # decode all generated tokens
-    token_ids = output.sequences[0, inputs["input_ids"].shape[1]:]
-    token_str = tokenizer.decode(token_ids).lower()
+    # next-token logits
+    logits = outputs.logits[0, -1, :]
+    probs = torch.softmax(logits, dim=-1)
 
-    # normalize candidate
-    predicted_vote = normalize_vote(token_str)
+    cand_probs = {}
 
-    # fallback: uniform if model output not recognized
-    probs = {c: 0.0 for c in CANDIDATES}
-    if predicted_vote in CANDIDATES:
-        probs[predicted_vote] = 1.0
-    else:
-        probs = {c: 1 / len(CANDIDATES) for c in CANDIDATES}
+    for cand, token_ids in CAND_TOKEN_IDS.items():
+        if not token_ids:
+            cand_probs[cand] = 0.0
+        else:
+            # Use first token probability (standard in LM classification)
+            cand_probs[cand] = probs[token_ids[0]].item()
 
-    return probs
+    # normalize over candidates
+    Z = sum(cand_probs.values())
+    if Z == 0:
+        return {c: 1 / len(CANDIDATES) for c in CANDIDATES}
+
+    return {k: v / Z for k, v in cand_probs.items()}
+
 
 
 def accuracy_from_probs(probs, ground_truth):
     return int(max(probs, key=probs.get) == ground_truth)
 
 def mutual_information(probs, ground_truth, eps=1e-12):
+    """
+    MI contribution: -log2 P(y | x)
+    """
     p = max(probs.get(ground_truth, eps), eps)
     return -np.log2(p)
+
 
 def vote_to_numeric(vote):
     return 0 if vote.lower() == CANDIDATES[1].lower() else 1
@@ -458,8 +461,10 @@ print(f"Saved final results to {out_file}")
 # Summary
 # -----------------------------
 print("\nSummary:")
+MI = np.mean([r["mutual_inf"] for r in results])
 print("Average accuracy:", df_final["accuracy"].mean())
-print("Average mutual information:", df_final["mutual_inf"].mean())
+# print("Average mutual information:", df_final["mutual_inf"].mean())
+print(f"Average mutual information: {MI:.3f}")
 for k,v in vote_metrics.items():
     print(f"{k}: {v}")
 
