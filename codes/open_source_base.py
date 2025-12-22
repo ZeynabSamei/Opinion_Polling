@@ -22,21 +22,15 @@ except ImportError:
 # -----------------------------
 # Arguments
 # -----------------------------
-parser = argparse.ArgumentParser(description="Vote prediction study with LLMs")
-parser.add_argument("--model_name", type=str, required=True,
-                    help="HF model name or local path")
-parser.add_argument("--data_path", type=str, required=True,
-                    help="Path to JSON dataset")
-parser.add_argument("--out_dir", type=str, default="./output",
-                    help="Output directory")
-parser.add_argument("--election_year", type=int, choices=[2020, 2024], required=True,
-                    help="Election year")
-parser.add_argument("--sleep", type=float, default=0.1,
-                    help="Sleep time between samples")
-parser.add_argument("--save_every", type=int, default=1000,
-                    help="Save intermediate results every N samples")
-parser.add_argument("--seed", type=int, default=42,
-                    help="Random seed")
+parser = argparse.ArgumentParser(description="Vote prediction with LLMs (full-text generation)")
+parser.add_argument("--model_name", type=str, required=True)
+parser.add_argument("--data_path", type=str, required=True)
+parser.add_argument("--out_dir", type=str, default="./output")
+parser.add_argument("--election_year", type=int, choices=[2020, 2024], required=True)
+parser.add_argument("--n_samples", type=int, default=10, help="Number of generations per prompt for probability estimation")
+parser.add_argument("--sleep", type=float, default=0.1)
+parser.add_argument("--save_every", type=int, default=1000)
+parser.add_argument("--seed", type=int, default=42)
 args = parser.parse_args()
 
 os.makedirs(args.out_dir, exist_ok=True)
@@ -74,7 +68,6 @@ elif args.election_year == 2024:
     CANDIDATES = ["Donald Trump", "Kamala Harris"]
 else:
     raise ValueError(f"Unsupported election_year: {args.election_year}")
-
 CANDIDATES_NORM = [c.lower() for c in CANDIDATES]
 
 # -----------------------------
@@ -85,10 +78,10 @@ def strip_assistant_messages(messages):
 
 def normalize_vote(text):
     if text is None: return None
-    t = text.lower().strip()
-    if "trump" in t: return "Donald Trump"
-    if "biden" in t: return "Joe Biden"
-    if "harris" in t: return "Kamala Harris"
+    t = text.lower()
+    for c in CANDIDATES:
+        if c.lower() in t:
+            return c
     return None
 
 def extract_ground_truth(messages):
@@ -97,34 +90,40 @@ def extract_ground_truth(messages):
             return normalize_vote(m["content"])
     return None
 
-def get_vote_probs(messages, max_new_tokens=10):
+def get_vote_probs(messages, n_samples=10, max_new_tokens=10):
     """
-    Compute candidate probabilities using full candidate token sequences.
+    Estimate candidate probabilities by generating multiple completions.
     """
     clean_msgs = strip_assistant_messages(messages)
     prompt = "\n".join(f"{m['role']}: {m['content']}" for m in clean_msgs)
-    inputs = tokenizer(prompt, return_tensors="pt").to(device)
+    prompt += f"\nVote choice ({' or '.join(CANDIDATES)}):"
 
-    with torch.no_grad():
-        output = model(**inputs)
-        logits = output.logits[0]  # [seq_len, vocab_size]
+    counts = {c: 0 for c in CANDIDATES}
 
-    candidate_probs = {}
-    for cand in CANDIDATES:
-        token_ids = tokenizer.encode(cand, add_special_tokens=False)
-        prob = 1.0
-        for i, tid in enumerate(token_ids):
-            next_idx = inputs["input_ids"].shape[1] + i
-            if next_idx >= logits.shape[0]:
-                # prevent index error
-                break
-            token_prob = torch.softmax(logits[next_idx], dim=-1)[tid].item()
-            prob *= token_prob
-        candidate_probs[cand] = prob
+    for _ in range(n_samples):
+        inputs = tokenizer(prompt, return_tensors="pt").to(device)
+        with torch.no_grad():
+            output_ids = model.generate(
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                do_sample=True,       # sampling for diversity
+                temperature=0.7,
+                top_p=0.9
+            )
+        output_text = tokenizer.decode(output_ids[0, inputs["input_ids"].shape[1]:]).strip()
+        vote = normalize_vote(output_text)
+        if vote is not None:
+            counts[vote] += 1
 
-    Z = sum(candidate_probs.values())
-    candidate_probs = {k: v / Z for k, v in candidate_probs.items()}
-    return candidate_probs
+    # normalize to probabilities
+    total = sum(counts.values())
+    if total == 0:
+        # fallback: uniform
+        probs = {c: 1/len(CANDIDATES) for c in CANDIDATES}
+    else:
+        probs = {c: counts[c]/total for c in CANDIDATES}
+
+    return probs
 
 def accuracy_from_probs(probs, ground_truth):
     return int(max(probs, key=probs.get) == ground_truth)
@@ -146,10 +145,12 @@ for idx, entry in tqdm(enumerate(data), total=len(data)):
     if gt is None or gt.lower() not in CANDIDATES_NORM:
         continue
 
-    probs = get_vote_probs(messages)
+    probs = get_vote_probs(messages, n_samples=args.n_samples)
     pred = max(probs, key=probs.get)
     mi = mutual_information(probs, gt)
     acc = accuracy_from_probs(probs, gt)
+
+    print(pred, gt, probs)
 
     results.append({
         "idx": idx,
@@ -163,19 +164,16 @@ for idx, entry in tqdm(enumerate(data), total=len(data)):
 
     if (idx+1) % args.save_every == 0:
         df_tmp = pd.DataFrame(results)
-        save_path = os.path.join(args.out_dir,
-                                 f"{args.model_name.replace('/', '_')}_{args.election_year}_partial.pkl")
+        save_path = os.path.join(args.out_dir, f"{args.model_name.replace('/', '_')}_{args.election_year}_partial.pkl")
         df_tmp.to_pickle(save_path)
         print(f"Saved intermediate results at index {idx} to {save_path}")
 
     time.sleep(args.sleep)
 
 df_final = pd.DataFrame(results)
-for r in results:
-    print(r["ground_truth"], r["predicted_vote"], r["probs"])
 
 # -----------------------------
-# Metrics
+# Compute metrics
 # -----------------------------
 anes_votes = df_final['ground_truth'].map(vote_to_numeric).to_numpy()
 gpt_votes = df_final['predicted_vote'].map(vote_to_numeric).to_numpy()
