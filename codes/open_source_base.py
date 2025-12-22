@@ -17,7 +17,7 @@ try:
     import pingouin as pg
     icc_available = True
 except ImportError:
-    print("pingouin not installed, ICC and tetrachoric will be skipped")
+    print("pingouin not installed, ICC will be skipped")
     icc_available = False
 
 # ==========================================
@@ -55,7 +55,6 @@ torch.manual_seed(SEED)
 
 with open(args.data_path, "r") as f:
     data = json.load(f)
-data=data[:50]
 
 df_primary = pd.DataFrame(data)
 df_primary['raw_idx'] = list(range(len(data)))
@@ -186,30 +185,22 @@ gpt_votes = df_final['predicted_vote'].dropna().map(vote_to_numeric).to_numpy()
 
 vote_metrics = {}
 
-if icc_available and len(np.unique(anes_votes)) > 1 and len(np.unique(gpt_votes)) > 1:
-    # Tetrachoric correlation using pingouin
-    try:
-        tetra_corr = pg.tetrachoric(anes_votes, gpt_votes)
-        vote_metrics['tetrachoric'] = tetra_corr
-    except Exception as e:
-        print(f"Warning: could not compute tetrachoric: {e}")
-        vote_metrics['tetrachoric'] = None
-else:
-    vote_metrics['tetrachoric'] = None
-
 # Cohen's Kappa
 vote_metrics['cohen_kappa'] = cohen_kappa_score(anes_votes, gpt_votes)
 
 # ICC
-try:
-    df_temp = pd.DataFrame({'anes': anes_votes, 'gpt': gpt_votes})
-    df_long = df_temp.reset_index().melt(id_vars='index', value_vars=['anes','gpt'],
-                                        var_name='rater', value_name='vote')
-    icc_df = pg.intraclass_corr(data=df_long, targets='index', raters='rater', ratings='vote')
-    icc_value = icc_df.loc[icc_df['Type']=='ICC2k','ICC'].values[0]
-    vote_metrics['ICC'] = icc_value
-except Exception as e:
-    print(f"Warning: could not compute ICC: {e}")
+if icc_available:
+    try:
+        df_temp = pd.DataFrame({'anes': anes_votes, 'gpt': gpt_votes})
+        df_long = df_temp.reset_index().melt(id_vars='index', value_vars=['anes','gpt'],
+                                            var_name='rater', value_name='vote')
+        icc_df = pg.intraclass_corr(data=df_long, targets='index', raters='rater', ratings='vote')
+        icc_value = icc_df.loc[icc_df['Type']=='ICC2k','ICC'].values[0]
+        vote_metrics['ICC'] = icc_value
+    except Exception as e:
+        print(f"Warning: could not compute ICC: {e}")
+        vote_metrics['ICC'] = None
+else:
     vote_metrics['ICC'] = None
 
 # Proportion agreement
