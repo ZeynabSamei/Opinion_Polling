@@ -386,7 +386,6 @@ for idx, entry in tqdm(enumerate(data), total=len(data)):
     acc = accuracy_from_probs(probs, gt)
     mi = mutual_information(probs, gt)
     pred = max(probs, key=probs.get)
-    print(pred)
 
     results.append({
         "idx": idx,
