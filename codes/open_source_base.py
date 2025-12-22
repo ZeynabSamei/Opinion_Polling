@@ -46,6 +46,7 @@ torch.manual_seed(SEED)
 
 with open(args.data_path, "r") as f:
     data = json.load(f)
+data=data[:3]
 
 # Build input dataframe (preserve order)
 df_input = pd.DataFrame({
@@ -185,6 +186,7 @@ df_final.to_csv(csv_path, index=False)
 print(f"Saved final dataframe:")
 print(f" - {pkl_path}")
 print(f" - {csv_path}")
+print(df_final)
 
 # ==========================================
 # Summary metrics
