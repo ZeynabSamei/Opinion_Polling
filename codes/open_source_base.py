@@ -6,7 +6,8 @@ import random
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-
+import torch
+import torch.nn.functional as F
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from sklearn.metrics import cohen_kappa_score
@@ -141,15 +142,14 @@ def extract_ground_truth(messages):
 #     return probs
 
 
-import torch
-import torch.nn.functional as F
+
 
 def get_vote_probs(messages, max_new_tokens=10, n_samples=1, smoothing=True):
     """
-    Compute candidate probabilities for a prompt in a way that mimics the primary paper:
-    - n_samples=1 corresponds to the exact paper method (single generation with top-token logprobs)
-    - n_samples>1 approximates distribution by sampling multiple times (Monte Carlo)
-    - smoothing adds Laplace smoothing to avoid degenerate 0/1 probs
+    Compute candidate probabilities over full candidate names.
+    - n_samples=1 mimics the paper (deterministic).
+    - n_samples>1 approximates probability with multiple stochastic samples.
+    - smoothing applies Laplace smoothing to avoid 0 probabilities.
     """
 
     # Build prompt
@@ -160,44 +160,52 @@ def get_vote_probs(messages, max_new_tokens=10, n_samples=1, smoothing=True):
     counts = {c: 0 for c in CANDIDATES}
 
     for _ in range(n_samples):
-        inputs = tokenizer(prompt, return_tensors="pt").to(device)
+        candidate_probs = {}
 
-        with torch.no_grad():
-            output = model.generate(
-                **inputs,
-                max_new_tokens=max_new_tokens,
-                do_sample=True if n_samples > 1 else False,  # deterministic for single sample
-                temperature=0.7 if n_samples > 1 else 0,
-                top_p=0.9 if n_samples > 1 else 1.0,
-                output_scores=True,
-                return_dict_in_generate=True
-            )
+        for candidate in CANDIDATES:
+            # Compute probability of generating full candidate name
+            inputs = tokenizer(prompt, return_tensors="pt").to(device)
+            candidate_ids = tokenizer.encode(candidate, add_special_tokens=False)
+            prob = 1.0
 
-        # Extract the first new token's logit
-        next_token_logits = output.scores[0][0]  # [vocab_size]
-        probs_tensor = F.softmax(next_token_logits, dim=-1)
-        
-        # Map candidate names to token ids
-        candidate_ids = [tokenizer.encode(c, add_special_tokens=False)[0] for c in CANDIDATES]
-        candidate_probs = [probs_tensor[i].item() for i in candidate_ids]
+            with torch.no_grad():
+                for token_id in candidate_ids:
+                    outputs = model(**inputs)
+                    logits = outputs.logits[:, -1, :]
+                    token_probs = torch.softmax(logits, dim=-1)
+                    p = token_probs[0, token_id].item()
+                    prob *= p
 
-        # Pick the candidate with highest probability for this sample
-        top_idx = candidate_probs.index(max(candidate_probs))
-        counts[CANDIDATES[top_idx]] += 1
+                    # Append token to input for next step
+                    inputs = tokenizer(torch.cat([inputs["input_ids"],
+                                                 torch.tensor([[token_id]]).to(device)], dim=1),
+                                       return_tensors="pt").to(device)
+
+            candidate_probs[candidate] = prob
+
+        # Normalize to sum=1
+        total = sum(candidate_probs.values())
+        if total > 0:
+            candidate_probs = {c: p/total for c, p in candidate_probs.items()}
+        else:
+            candidate_probs = {c: 1/len(CANDIDATES) for c in CANDIDATES}
+
+        # Increment counts
+        top_candidate = max(candidate_probs, key=candidate_probs.get)
+        counts[top_candidate] += 1
 
     # Normalize counts to probabilities
-    total = sum(counts.values())
-    if total == 0:
-        # fallback: uniform if absolutely nothing matched
+    total_counts = sum(counts.values())
+    if total_counts == 0:
         probs = {c: 1/len(CANDIDATES) for c in CANDIDATES}
     else:
         if smoothing:
-            # Laplace smoothing
-            probs = {c: (counts[c] + 1)/(total + len(CANDIDATES)) for c in CANDIDATES}
+            probs = {c: (counts[c] + 1)/(total_counts + len(CANDIDATES)) for c in CANDIDATES}
         else:
-            probs = {c: counts[c]/total for c in CANDIDATES}
+            probs = {c: counts[c]/total_counts for c in CANDIDATES}
 
     return probs
+
 
 
 def accuracy_from_probs(probs, ground_truth):
