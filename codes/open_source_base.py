@@ -43,7 +43,6 @@ torch.manual_seed(args.seed)
 # -----------------------------
 with open(args.data_path, "r") as f:
     data = json.load(f)
-random.shuffle(data)
 print(f"Loaded {len(data)} samples")
 
 # -----------------------------
@@ -215,9 +214,24 @@ vote_metrics['proportion_agreement'] = np.mean(anes_votes == gpt_votes)
 for k,v in vote_metrics.items():
     df_final[k] = v
 
+
+
+# -----------------------------
+# Merge original dataset into final results
+# -----------------------------
+# Convert primary input `data` (list of dicts) to DataFrame
+df_input = pd.DataFrame(data)
+
+# Keep only columns that exist in input and not in df_final
+input_cols = [c for c in df_input.columns if c not in df_final.columns]
+
+# Merge on index (assumes order is preserved)
+df_final = pd.concat([df_final.reset_index(drop=True), df_input[input_cols].reset_index(drop=True)], axis=1)
+
 # -----------------------------
 # Save final results
 # -----------------------------
+
 out_file = os.path.join(args.out_dir, f"{args.model_name.replace('/', '_')}_{args.election_year}_final.pkl")
 df_final.to_pickle(out_file)
 df_final.to_csv(out_file.replace(".pkl",".csv"), index=False)
