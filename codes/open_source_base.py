@@ -50,17 +50,31 @@ print(f"Loaded {len(data)} samples")
 # Load model
 # -----------------------------
 print(f"Loading model {args.model_name} ...")
+
 tokenizer = AutoTokenizer.from_pretrained(args.model_name)
+
 model = AutoModelForCausalLM.from_pretrained(
     args.model_name,
     device_map="auto",
     torch_dtype=torch.float16
 )
-model.eval()
-device = model.device if hasattr(model, "device") else next(model.parameters()).device
 
+# ---- pad token fix (complete) ----
 tokenizer.pad_token = tokenizer.eos_token
+tokenizer.pad_token_id = tokenizer.eos_token_id
+
 model.config.pad_token_id = tokenizer.eos_token_id
+model.generation_config.pad_token_id = tokenizer.eos_token_id
+# ---------------------------------
+
+model.eval()
+
+device = (
+    model.device
+    if hasattr(model, "device")
+    else next(model.parameters()).device
+)
+
 # -----------------------------
 # Election year → candidates
 # -----------------------------
