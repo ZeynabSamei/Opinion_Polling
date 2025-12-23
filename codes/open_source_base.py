@@ -299,6 +299,7 @@ out_file = os.path.join(args.out_dir, f"{args.model_name.replace('/', '_')}_{arg
 df_final.to_pickle(out_file)
 df_final.to_csv(out_file.replace(".pkl",".csv"), index=False)
 print(f"Saved final results to {out_file}")
+print(df_final)
 
 # -----------------------------
 # Summary
