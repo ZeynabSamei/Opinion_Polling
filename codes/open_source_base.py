@@ -159,27 +159,23 @@ def get_vote_probs(messages, max_new_tokens=10, n_samples=1, smoothing=True):
 
     counts = {c: 0 for c in CANDIDATES}
 
+
     for _ in range(n_samples):
         candidate_probs = {}
-
         for candidate in CANDIDATES:
-            # Compute probability of generating full candidate name
-            inputs = tokenizer(prompt, return_tensors="pt").to(device)
+            input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
             candidate_ids = tokenizer.encode(candidate, add_special_tokens=False)
             prob = 1.0
 
-            with torch.no_grad():
-                for token_id in candidate_ids:
-                    outputs = model(**inputs)
+            for token_id in candidate_ids:
+                with torch.no_grad():
+                    outputs = model(input_ids=input_ids)
                     logits = outputs.logits[:, -1, :]
-                    token_probs = torch.softmax(logits, dim=-1)
-                    p = token_probs[0, token_id].item()
-                    prob *= p
+                    probs_tensor = torch.softmax(logits, dim=-1)
+                    prob *= probs_tensor[0, token_id].item()
 
-                    # Append token to input for next step
-                    inputs = tokenizer(torch.cat([inputs["input_ids"],
-                                                 torch.tensor([[token_id]]).to(device)], dim=1),
-                                       return_tensors="pt").to(device)
+                # append token id for next token
+                input_ids = torch.cat([input_ids, torch.tensor([[token_id]]).to(device)], dim=1)
 
             candidate_probs[candidate] = prob
 
