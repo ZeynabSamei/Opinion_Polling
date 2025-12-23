@@ -105,11 +105,55 @@ def extract_ground_truth(messages):
             return normalize_vote(m["content"])
     return None
 
-def get_vote_probs(messages, n_samples=10, max_new_tokens=10):
+# def get_vote_probs(messages, n_samples=10, max_new_tokens=10):
+#     """
+#     Estimate candidate probabilities by generating multiple completions.
+#     """
+#     clean_msgs = strip_assistant_messages(messages)
+#     prompt = "\n".join(f"{m['role']}: {m['content']}" for m in clean_msgs)
+#     prompt += f"\nVote choice ({' or '.join(CANDIDATES)}):"
+
+#     counts = {c: 0 for c in CANDIDATES}
+
+#     for _ in range(n_samples):
+#         inputs = tokenizer(prompt, return_tensors="pt").to(device)
+#         with torch.no_grad():
+#             output_ids = model.generate(
+#                 **inputs,
+#                 max_new_tokens=max_new_tokens,
+#                 do_sample=True,       # sampling for diversity
+#                 temperature=0.7,
+#                 top_p=0.9
+#             )
+#         output_text = tokenizer.decode(output_ids[0, inputs["input_ids"].shape[1]:]).strip()
+#         vote = normalize_vote(output_text)
+#         if vote is not None:
+#             counts[vote] += 1
+
+#     # normalize to probabilities
+#     total = sum(counts.values())
+#     if total == 0:
+#         # fallback: uniform
+#         probs = {c: 1/len(CANDIDATES) for c in CANDIDATES}
+#     else:
+#         probs = {c: counts[c]/total for c in CANDIDATES}
+
+#     return probs
+
+
+import torch
+import torch.nn.functional as F
+
+def get_vote_probs(messages, max_new_tokens=10, n_samples=1, smoothing=True):
     """
-    Estimate candidate probabilities by generating multiple completions.
+    Compute candidate probabilities for a prompt in a way that mimics the primary paper:
+    - n_samples=1 corresponds to the exact paper method (single generation with top-token logprobs)
+    - n_samples>1 approximates distribution by sampling multiple times (Monte Carlo)
+    - smoothing adds Laplace smoothing to avoid degenerate 0/1 probs
     """
-    clean_msgs = strip_assistant_messages(messages)
+
+    # Build prompt
+    clean_msgs = [m for m in messages if m["role"] != "assistant"]
     prompt = "\n".join(f"{m['role']}: {m['content']}" for m in clean_msgs)
     prompt += f"\nVote choice ({' or '.join(CANDIDATES)}):"
 
@@ -117,28 +161,44 @@ def get_vote_probs(messages, n_samples=10, max_new_tokens=10):
 
     for _ in range(n_samples):
         inputs = tokenizer(prompt, return_tensors="pt").to(device)
+
         with torch.no_grad():
-            output_ids = model.generate(
+            output = model.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens,
-                do_sample=True,       # sampling for diversity
-                temperature=0.7,
-                top_p=0.9
+                do_sample=True if n_samples > 1 else False,  # deterministic for single sample
+                temperature=0.7 if n_samples > 1 else 0,
+                top_p=0.9 if n_samples > 1 else 1.0,
+                output_scores=True,
+                return_dict_in_generate=True
             )
-        output_text = tokenizer.decode(output_ids[0, inputs["input_ids"].shape[1]:]).strip()
-        vote = normalize_vote(output_text)
-        if vote is not None:
-            counts[vote] += 1
 
-    # normalize to probabilities
+        # Extract the first new token's logit
+        next_token_logits = output.scores[0][0]  # [vocab_size]
+        probs_tensor = F.softmax(next_token_logits, dim=-1)
+        
+        # Map candidate names to token ids
+        candidate_ids = [tokenizer.encode(c, add_special_tokens=False)[0] for c in CANDIDATES]
+        candidate_probs = [probs_tensor[i].item() for i in candidate_ids]
+
+        # Pick the candidate with highest probability for this sample
+        top_idx = candidate_probs.index(max(candidate_probs))
+        counts[CANDIDATES[top_idx]] += 1
+
+    # Normalize counts to probabilities
     total = sum(counts.values())
     if total == 0:
-        # fallback: uniform
+        # fallback: uniform if absolutely nothing matched
         probs = {c: 1/len(CANDIDATES) for c in CANDIDATES}
     else:
-        probs = {c: counts[c]/total for c in CANDIDATES}
+        if smoothing:
+            # Laplace smoothing
+            probs = {c: (counts[c] + 1)/(total + len(CANDIDATES)) for c in CANDIDATES}
+        else:
+            probs = {c: counts[c]/total for c in CANDIDATES}
 
     return probs
+
 
 def accuracy_from_probs(probs, ground_truth):
     return int(max(probs, key=probs.get) == ground_truth)
@@ -164,6 +224,9 @@ for idx, entry in tqdm(enumerate(data), total=len(data)):
     pred = max(probs, key=probs.get)
     mi = mutual_information(probs, gt)
     acc = accuracy_from_probs(probs, gt)
+    probs = get_vote_probs(messages, n_samples=20)
+    print(probs)
+
 
     # print(pred, gt, probs)
 
