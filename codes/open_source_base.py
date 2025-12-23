@@ -267,7 +267,7 @@ for idx, entry in tqdm(enumerate(data), total=len(data)):
     if gt is None or gt.lower() not in CANDIDATES_NORM:
         continue
 
-    probs = get_vote_probs(messages, n_samples=args.n_samples)
+    probs = get_vote_probs(messages)
     pred = max(probs, key=probs.get)
     mi = mutual_information(probs, gt)
     acc = accuracy_from_probs(probs, gt)
