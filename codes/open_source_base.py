@@ -271,7 +271,7 @@ for idx, entry in tqdm(enumerate(data), total=len(data)):
     pred = max(probs, key=probs.get)
     mi = mutual_information(probs, gt)
     acc = accuracy_from_probs(probs, gt)
-    print(probs)
+    # print(probs)
 
 
     # print(pred, gt, probs)
