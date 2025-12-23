@@ -30,7 +30,7 @@ parser.add_argument("--out_dir", type=str, default="./output")
 parser.add_argument("--election_year", type=int, choices=[2020, 2024], required=True)
 parser.add_argument("--n_samples", type=int, default=10, help="Number of generations per prompt for probability estimation")
 parser.add_argument("--sleep", type=float, default=0.1)
-parser.add_argument("--save_every", type=int, default=1000)
+parser.add_argument("--save_every", type=int, default=500)
 parser.add_argument("--seed", type=int, default=42)
 args = parser.parse_args()
 
