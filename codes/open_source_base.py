@@ -144,12 +144,69 @@ def extract_ground_truth(messages):
 
 
 
-def get_vote_probs(messages, max_new_tokens=10, n_samples=1, smoothing=True):
+# def get_vote_probs(messages, max_new_tokens=10, n_samples=1, smoothing=True):
+#     """
+#     Compute candidate probabilities over full candidate names.
+#     - n_samples=1 mimics the paper (deterministic).
+#     - n_samples>1 approximates probability with multiple stochastic samples.
+#     - smoothing applies Laplace smoothing to avoid 0 probabilities.
+#     """
+
+#     # Build prompt
+#     clean_msgs = [m for m in messages if m["role"] != "assistant"]
+#     prompt = "\n".join(f"{m['role']}: {m['content']}" for m in clean_msgs)
+#     prompt += f"\nVote choice ({' or '.join(CANDIDATES)}):"
+
+#     counts = {c: 0 for c in CANDIDATES}
+
+
+#     for _ in range(n_samples):
+#         candidate_probs = {}
+#         for candidate in CANDIDATES:
+#             input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
+#             candidate_ids = tokenizer.encode(candidate, add_special_tokens=False)
+#             prob = 1.0
+
+#             for token_id in candidate_ids:
+#                 with torch.no_grad():
+#                     outputs = model(input_ids=input_ids)
+#                     logits = outputs.logits[:, -1, :]
+#                     probs_tensor = torch.softmax(logits, dim=-1)
+#                     prob *= probs_tensor[0, token_id].item()
+
+#                 # append token id for next token
+#                 input_ids = torch.cat([input_ids, torch.tensor([[token_id]]).to(device)], dim=1)
+
+#             candidate_probs[candidate] = prob
+
+#         # Normalize to sum=1
+#         total = sum(candidate_probs.values())
+#         if total > 0:
+#             candidate_probs = {c: p/total for c, p in candidate_probs.items()}
+#         else:
+#             candidate_probs = {c: 1/len(CANDIDATES) for c in CANDIDATES}
+
+#         # Increment counts
+#         top_candidate = max(candidate_probs, key=candidate_probs.get)
+#         counts[top_candidate] += 1
+
+#     # Normalize counts to probabilities
+#     total_counts = sum(counts.values())
+#     if total_counts == 0:
+#         probs = {c: 1/len(CANDIDATES) for c in CANDIDATES}
+#     else:
+#         if smoothing:
+#             probs = {c: (counts[c] + 1)/(total_counts + len(CANDIDATES)) for c in CANDIDATES}
+#         else:
+#             probs = {c: counts[c]/total_counts for c in CANDIDATES}
+
+#     return probs
+
+
+
+def get_vote_probs(messages, max_new_tokens=10):
     """
-    Compute candidate probabilities over full candidate names.
-    - n_samples=1 mimics the paper (deterministic).
-    - n_samples>1 approximates probability with multiple stochastic samples.
-    - smoothing applies Laplace smoothing to avoid 0 probabilities.
+    Single deterministic pass to get candidate probabilities (matches paper exactly)
     """
 
     # Build prompt
@@ -157,51 +214,37 @@ def get_vote_probs(messages, max_new_tokens=10, n_samples=1, smoothing=True):
     prompt = "\n".join(f"{m['role']}: {m['content']}" for m in clean_msgs)
     prompt += f"\nVote choice ({' or '.join(CANDIDATES)}):"
 
-    counts = {c: 0 for c in CANDIDATES}
+    # Encode prompt
+    inputs_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
 
+    candidate_probs = {}
+    for candidate in CANDIDATES:
+        candidate_ids = tokenizer.encode(candidate, add_special_tokens=False)
 
-    for _ in range(n_samples):
-        candidate_probs = {}
-        for candidate in CANDIDATES:
-            input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
-            candidate_ids = tokenizer.encode(candidate, add_special_tokens=False)
-            prob = 1.0
+        prob = 1.0
+        current_input_ids = inputs_ids.clone()
 
+        with torch.no_grad():
             for token_id in candidate_ids:
-                with torch.no_grad():
-                    outputs = model(input_ids=input_ids)
-                    logits = outputs.logits[:, -1, :]
-                    probs_tensor = torch.softmax(logits, dim=-1)
-                    prob *= probs_tensor[0, token_id].item()
+                outputs = model(input_ids=current_input_ids)
+                logits = outputs.logits[:, -1, :]
+                token_probs = torch.softmax(logits, dim=-1)
+                prob *= token_probs[0, token_id].item()
 
-                # append token id for next token
-                input_ids = torch.cat([input_ids, torch.tensor([[token_id]]).to(device)], dim=1)
+                # append token id for next step
+                current_input_ids = torch.cat([current_input_ids, torch.tensor([[token_id]]).to(device)], dim=1)
 
-            candidate_probs[candidate] = prob
+        candidate_probs[candidate] = prob
 
-        # Normalize to sum=1
-        total = sum(candidate_probs.values())
-        if total > 0:
-            candidate_probs = {c: p/total for c, p in candidate_probs.items()}
-        else:
-            candidate_probs = {c: 1/len(CANDIDATES) for c in CANDIDATES}
-
-        # Increment counts
-        top_candidate = max(candidate_probs, key=candidate_probs.get)
-        counts[top_candidate] += 1
-
-    # Normalize counts to probabilities
-    total_counts = sum(counts.values())
-    if total_counts == 0:
-        probs = {c: 1/len(CANDIDATES) for c in CANDIDATES}
+    # Normalize probabilities
+    total = sum(candidate_probs.values())
+    if total > 0:
+        candidate_probs = {c: p / total for c, p in candidate_probs.items()}
     else:
-        if smoothing:
-            probs = {c: (counts[c] + 1)/(total_counts + len(CANDIDATES)) for c in CANDIDATES}
-        else:
-            probs = {c: counts[c]/total_counts for c in CANDIDATES}
+        # fallback uniform if model didn't assign any probability
+        candidate_probs = {c: 1/len(CANDIDATES) for c in CANDIDATES}
 
-    return probs
-
+    return candidate_probs
 
 
 def accuracy_from_probs(probs, ground_truth):
